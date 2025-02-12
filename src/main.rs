@@ -50,7 +50,7 @@ async fn main() {
     };
 
     // 4) Prepare the system and user messages for GPT-4
-    let system_prompt = "You are listening in on a conversation. If there is something said that you could provide some interesting information about, return a response. If there is nothing interesting to share, just return Listening...";
+    let system_prompt = "You are listening in on a conversation. You will display your response on a monitor mounted on the wall, so the goal should be 50 words or less so they are not too small. If there is something said that you could provide some interesting information about, return a response. If there is nothing interesting to share, just return Listening...";
     let user_content = transcribed_text;
 
     // 5) Call GPT-4 with streaming
