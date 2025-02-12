@@ -95,5 +95,5 @@ Check your OpenAI API key and internet connection. View logs for details.
 This project is open-source and licensed under the MIT License.
 
 ## Author
-Created by **Your Name** - Contributions Welcome!
+Created by **Leonard Speiser** - Contributions Welcome!
 
