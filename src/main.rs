@@ -20,6 +20,10 @@
 //   appended lines in real time.
 // - A new /live_log SSE endpoint that sends each appended JSON line
 //   to the browser without requiring refresh.
+//
+// ADDITION:
+// - We now keep up to the last 20 messages in conversation_history 
+//   to provide context to GPT each time we process a new chunk.
 /////////////////////////////////////////////////////////////
 
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
@@ -40,7 +44,7 @@ use chrono::Utc;
 // For streaming lines as SSE
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
-use actix_web::web::{Data, Bytes}; // ADDED Bytes import
+use actix_web::web::{Data, Bytes};
 
 /////////////////////////////////////////////////////////////
 // For HTTP calls to OpenAI
@@ -58,8 +62,12 @@ struct AppState {
     // Last GPT response to that transcription
     last_gpt_response: Arc<AsyncMutex<String>>,
 
-    // ADDED: Broadcast channel to push new log lines in real-time
+    // SSE broadcast
     log_sender: broadcast::Sender<String>,
+
+    // NEW: store up to last 20 conversation messages
+    // Each tuple is (role, content), role is "user" or "assistant"
+    conversation_history: Arc<AsyncMutex<Vec<(String, String)>>>,
 }
 
 /////////////////////////////////////////////////////////////
@@ -167,12 +175,16 @@ async fn main() -> std::io::Result<()> {
     // ADDED: Create a broadcast channel for real-time SSE lines
     let (log_sender, _rx) = broadcast::channel(100);
 
+    // NEW: Initialize conversation_history
+    let conversation_history = Arc::new(AsyncMutex::new(Vec::new()));
+
     // Initialize shared state
     let app_state = web::Data::new(AppState {
         is_recording: Arc::new(AsyncMutex::new(false)),
         last_transcript: Arc::new(AsyncMutex::new(String::new())),
         last_gpt_response: Arc::new(AsyncMutex::new(String::new())),
-        log_sender, // store the sender
+        log_sender,
+        conversation_history,
     });
 
     // Launch Actix Web
@@ -198,14 +210,14 @@ async fn main() -> std::io::Result<()> {
 // is_recording = true. For each chunk, we do:
 // 1) record_audio_in_memory(5)
 // 2) transcribe with Whisper
-// 3) summarize with GPT
-// 4) append both to a JSON file with timestamps
-// 5) update shared state
+// 3) build a chat prompt with last 20 messages + new transcript
+// 4) Summarize with GPT
+// 5) append both to a JSON file with timestamps
+// 6) update shared state
 /////////////////////////////////////////////////////////////
 async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
     // We loop until is_recording = false
     loop {
-        // Check the is_recording flag at the start of each iteration
         {
             let flag = app_data.is_recording.lock().await;
             if !*flag {
@@ -223,12 +235,32 @@ async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
         let transcript = transcribe_audio_with_whisper(&audio_data).await?;
         println!("   >>> Transcript: {}", transcript);
 
-        // Summarize with GPT
+        // We add this new user message to conversation history
+        {
+            let mut hist = app_data.conversation_history.lock().await;
+            hist.push(("user".to_string(), transcript.clone()));
+            // Keep only last 20 messages
+            if hist.len() > 40 {
+                // each user+assistant = 2 messages, so 40 entries ~ 20 pairs
+                hist.drain(0..(hist.len() - 40));
+            }
+        }
+
+        // Summarize with GPT using last 20 messages
         println!("   >>> Summarizing chunk with GPT...");
-        let gpt_response = summarize_with_gpt(&transcript).await?;
+        let gpt_response = summarize_with_gpt(&app_data, &transcript).await?;
         println!("   >>> GPT response: {}", gpt_response);
 
-        // ADDED: Append both to a local JSON file with timestamps
+        // Add the assistant's response to conversation history
+        {
+            let mut hist = app_data.conversation_history.lock().await;
+            hist.push(("assistant".to_string(), gpt_response.clone()));
+            if hist.len() > 40 {
+                hist.drain(0..(hist.len() - 40));
+            }
+        }
+
+        // Append to JSON file for logging
         append_to_json_log("Microphone", &transcript, &app_data)?;
         append_to_json_log("OPENAI RESPONSE", &gpt_response, &app_data)?;
 
@@ -242,7 +274,6 @@ async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
             *g = gpt_response;
         }
 
-        // Check if still recording after the chunk
         {
             let flag = app_data.is_recording.lock().await;
             if !*flag {
@@ -374,21 +405,56 @@ async fn transcribe_audio_with_whisper(audio_data: &[u8]) -> Result<String> {
 /////////////////////////////////////////////////////////////
 // summarize_with_gpt
 //
-// Sends the transcription to GPT-4o for summarizing
-// DO NOT CHANGE THE system_prompt text
+// We now build a "chat" array with:
+// - system message
+// - up to 20 user/assistant messages from conversation_history
+// - the new user chunk
+//
+// Then call GPT with "gpt-4o" per your code.
 /////////////////////////////////////////////////////////////
-async fn summarize_with_gpt(transcript: &str) -> Result<String> {
+async fn summarize_with_gpt(
+    app_data: &web::Data<AppState>,
+    latest_chunk: &str
+) -> Result<String> {
     let api_key = env::var("OPENAI_API_KEY")
         .context("Must set OPENAI_API_KEY")?;
-    println!("   [DEBUG] Sending transcript to GPT: {}", transcript);
+    println!("   [DEBUG] Sending transcript to GPT: {}", latest_chunk);
 
     let system_prompt = "You are listening in on a conversation. You will display your response on a monitor mounted on the wall, so the goal should be 50 words or less so they are not too small. If there is something said that you could provide some interesting information about, return a response. If there is nothing interesting to share, just return Listening...";
+
+    // Gather last 20 messages
+    let mut history = app_data.conversation_history.lock().await.clone();
+
+    // We'll build a messages array for ChatCompletion
+    let mut messages = Vec::new();
+    // Start with system
+    messages.push(serde_json::json!({
+        "role": "system",
+        "content": system_prompt
+    }));
+
+    // Add up to last 20 from conversation_history
+    // Each item is ("user"|"assistant", content)
+    // We’ll skip if empty. We'll do the last 20 items or fewer.
+    let start_idx = if history.len() > 40 { history.len() - 40 } else { 0 };
+    for (role, content) in &history[start_idx..] {
+        let r = if role == "assistant" { "assistant" } else { "user" };
+        messages.push(serde_json::json!({
+            "role": r,
+            "content": content
+        }));
+    }
+
+    // Finally add the new chunk as a user message
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": latest_chunk
+    }));
+
+    // Build request body
     let req_body = serde_json::json!({
-        "model": "gpt-4o",
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user",   "content": transcript }
-        ],
+        "model": "gpt-4o", // same as your code
+        "messages": messages,
         "max_tokens": 100,
         "temperature": 0.7
     });
@@ -422,11 +488,10 @@ async fn summarize_with_gpt(transcript: &str) -> Result<String> {
 }
 
 /////////////////////////////////////////////////////////////
-// ADDED:
-// append_to_json_log(source, text, app_data)
+// append_to_json_log
 //
-// Now requires app_data so we can broadcast new lines over SSE.
-// The original function name remains, but we add an extra param.
+// Called after we get the new user chunk + GPT response
+// Also broadcasts over SSE
 /////////////////////////////////////////////////////////////
 fn append_to_json_log(
     source: &str,
@@ -456,19 +521,19 @@ fn append_to_json_log(
 
     println!("   [DEBUG] Appended record to conversation_log.json: {}", record_string);
 
-    // ADDED: Also broadcast over SSE for real-time display
+    // Also broadcast over SSE for real-time display
     let _ = app_data.log_sender.send(record_string.clone());
 
     Ok(())
 }
 
 /////////////////////////////////////////////////////////////
-// ENABLE SCREEN TO SHOW OUTPUTS
+// conversation_log
+//
+// Returns the entire 'conversation_log.json' as text
 /////////////////////////////////////////////////////////////
-
 #[get("/conversation_log")]
 async fn conversation_log() -> impl Responder {
-    // Simple approach: read the entire file as text, return as plain text
     let path = "conversation_log.json";
 
     match std::fs::read_to_string(path) {
@@ -485,26 +550,21 @@ async fn conversation_log() -> impl Responder {
 }
 
 /////////////////////////////////////////////////////////////
-// ADDED: SSE ENDPOINT /live_log
+// live_log_sse
 //
-// Streams new lines from conversation_log.json in real-time
-// using the broadcast channel in AppState.
+// SSE endpoint that streams appended lines in real-time
 /////////////////////////////////////////////////////////////
 #[get("/live_log")]
 async fn live_log_sse(app_data: web::Data<AppState>) -> HttpResponse {
-    // Subscribe to the broadcast channel
     let rx = app_data.log_sender.subscribe();
 
-    // Convert the broadcast receiver into a stream of SSE events
     let sse_stream = BroadcastStream::new(rx).map(|res| {
         match res {
             Ok(line) => {
-                // Convert line => SSE data => Bytes
                 let msg = format!("data: {}\n\n", line);
                 Ok::<Bytes, std::io::Error>(Bytes::from(msg))
             }
             Err(_) => {
-                // If channel lagged or closed
                 Ok::<Bytes, std::io::Error>(Bytes::from("data:\n\n"))
             }
         }

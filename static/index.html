@@ -4,9 +4,39 @@
   <meta charset="UTF-8"/>
   <title>In-Memory Recording</title>
   <style>
+    /* Original style lines left intact: */
     body { text-align: center; font-family: Arial, sans-serif; }
     button { margin: 20px; font-size: 18px; padding: 10px 20px; }
     #status { margin-top: 30px; font-style: italic; }
+
+    /* ADDED: "Green screen" style overrides: */
+    html, body {
+      background-color: #000; /* black background */
+      color: #0f0;           /* green text */
+      font-family: "Courier New", Courier, monospace; /* terminal-like font */
+      font-size: 1.5em;      /* bigger text */
+      margin: 0; 
+      padding: 0;
+    }
+
+    h1 {
+      margin-top: 0.5em;
+    }
+
+    /* Pre blocks for display, ensuring no wrapping or at least pre-wrap for long lines: */
+    pre {
+      white-space: pre-wrap;
+      text-align: left;
+      margin: 1em auto;
+      width: 90%;
+      background-color: #000;
+      color: #0f0;
+    }
+
+    /* Make SSE lines appear line-by-line in #conversationLog */
+    .chat-line {
+      margin: 0.5em 0;
+    }
   </style>
 </head>
 <body>
@@ -31,13 +61,42 @@
       // POST /start_recording
       await fetch('/start_recording', { method: 'POST' });
 
-      // ADDED: If SSE not already started, connect now.
+      // If SSE not already started, connect now.
       if (!es) {
         es = new EventSource('/live_log');
         es.onmessage = (event) => {
-          // Each new JSON line appended by the server arrives here
-          // Append it to the conversationLog <pre> in real time
-          document.getElementById('conversationLog').textContent += event.data;
+          // COMMENTING OUT the old raw-JSON line; we keep it but do not remove:
+          // document.getElementById('conversationLog').textContent += event.data;
+
+          // NEW CODE: parse the SSE "data: {...}" lines as JSON:
+          const raw = event.data.trim();
+          // SSE lines often start with "data: "
+          if (raw.startsWith("{")) {
+            // If it starts directly with JSON, parse:
+            try {
+              const obj = JSON.parse(raw);
+              if (obj.text) {
+                document.getElementById('conversationLog').innerHTML 
+                  += `<div class="chat-line">${obj.text}</div>`;
+              }
+            } catch(e) {
+              console.log("JSON parse error (no 'data: ' prefix)", e);
+            }
+          } else if (raw.startsWith("data: ")) {
+            // Extract JSON part
+            let jsonPart = raw.slice(6).trim(); // remove "data:"
+            if (jsonPart.startsWith("{")) {
+              try {
+                const obj = JSON.parse(jsonPart);
+                if (obj.text) {
+                  document.getElementById('conversationLog').innerHTML 
+                    += `<div class="chat-line">${obj.text}</div>`;
+                }
+              } catch(e) {
+                console.log("JSON parse error", e);
+              }
+            }
+          }
         };
         es.onerror = (err) => {
           console.log("SSE error", err);
@@ -50,8 +109,7 @@
       // POST /stop_recording
       await fetch('/stop_recording', { method: 'POST' });
 
-      // ADDED: optionally close the SSE connection if we don't want more lines
-      // But if you want to keep seeing lines, you can omit this
+      // optionally close the SSE connection if we don't want more lines
       if (es) {
         es.close();
         es = null;
