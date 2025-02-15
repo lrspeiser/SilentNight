@@ -25,7 +25,9 @@ async fn main() -> std::io::Result<()> {
             .service(start_recording)
             .service(stop_recording)
     })
-    .bind(("0.0.0.0", 8080))?
+    .bind(("0.0.0.0", 8080))
+    .expect("Failed to bind to port 8080")
+    .workers(2)
     .run()
     .await
 }
