@@ -436,3 +436,27 @@ fn append_to_json_log(source: &str, text: &str) -> Result<()> {
     println!("   [DEBUG] Appended record to conversation_log.json: {}", record_string);
     Ok(())
 }
+
+/////////////////////////////////////////////////////////////
+// ENABLE SCREEN TO SHOW OUTPUTS
+/////////////////////////////////////////////////////////////
+
+use actix_files::NamedFile; // optional approach or read file manually
+
+#[get("/conversation_log")]
+async fn conversation_log() -> impl Responder {
+    // Simple approach: read the entire file as text, return as plain text
+    let path = "conversation_log.json";
+
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            HttpResponse::Ok()
+                .content_type("text/plain; charset=utf-8")
+                .body(contents)
+        }
+        Err(e) => {
+            HttpResponse::NotFound()
+                .body(format!("Failed to read {path}: {e}"))
+        }
+    }
+}

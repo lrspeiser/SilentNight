@@ -15,8 +15,12 @@
   <button onclick="startRecording()">Start Recording</button>
   <button onclick="stopRecording()">Stop Recording</button>
   <button onclick="fetchTranscript()">Get Last Transcript/Response</button>
+  <!-- ADDED: Button to view the entire conversation_log.json -->
+  <button onclick="viewFullLog()">View Full Log</button>
 
   <pre id="transcriptArea"></pre>
+  <!-- ADDED: Pre block for entire log file display -->
+  <pre id="conversationLog"></pre>
 
   <script>
     async function startRecording() {
@@ -37,6 +41,21 @@
       const data = await resp.json();
       document.getElementById('transcriptArea').textContent = 
         "TRANSCRIPT:\n" + data.transcript + "\n\nGPT RESPONSE:\n" + data.gpt_response;
+    }
+
+    // ADDED: View entire conversation_log.json
+    async function viewFullLog() {
+      document.getElementById('status').innerText = "Fetching full conversation log...";
+      // GET /conversation_log
+      const resp = await fetch('/conversation_log');
+      if (!resp.ok) {
+        document.getElementById('status').innerText = "Failed to fetch conversation_log";
+        return;
+      }
+      // We'll just display raw text
+      const text = await resp.text();
+      document.getElementById('conversationLog').textContent = text;
+      document.getElementById('status').innerText = "Full log fetched.";
     }
   </script>
 </body>
