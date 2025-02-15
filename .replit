@@ -14,5 +14,9 @@ deploymentTarget = "cloudrun"
 run = ["sh", "-c", "cargo run --release"]
 
 [[ports]]
+localPort = 80
+externalPort = 3000
+
+[[ports]]
 localPort = 8080
 externalPort = 80
