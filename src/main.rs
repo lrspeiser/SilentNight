@@ -1,12 +1,19 @@
 /////////////////////////////////////////////////////////////
 // src/main.rs
 //
-// A single Actix Web server that records 5s of audio 
-// in memory. It can switch between macOS "rec" (SoX) 
-// and Linux "arecord" based on the MIC_BACKEND env var.
+// A single Actix Web server that records 5s of audio
+// in memory. It can switch between macOS "rec" (SoX)
+// and Linux "arecord" based on MIC_BACKEND env var.
 //
 // Then sends the captured WAV data to OpenAI Whisper & GPT.
 // Logging has been expanded so you can confirm local calls.
+//
+// ADDED:
+// - Chunk-based continuous recording in 5s blocks until user 
+//   clicks "Stop". 
+// - Appending transcripts and GPT responses as JSON to a file,
+//   with "source": "Microphone" or "OPENAI RESPONSE" plus 
+//   timestamps.
 /////////////////////////////////////////////////////////////
 
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
@@ -20,6 +27,9 @@ use tokio::process::Command;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::process::Stdio;
+
+// ADDED: for timestamps
+use chrono::Utc;
 
 /////////////////////////////////////////////////////////////
 // For HTTP calls to OpenAI
@@ -77,10 +87,12 @@ async fn get_transcript(app_data: web::Data<AppState>) -> impl Responder {
 // POST /start_recording
 //
 // If not already recording, spawns a background task to:
-//   1) Capture 5s of audio -> in-memory
+//   1) Repeatedly capture 5s of audio -> in-memory
 //   2) Transcribe via Whisper
 //   3) Summarize via GPT
-//   4) Update the shared transcript/gpt fields
+//   4) Append each chunk+response to a local JSON file
+//   5) Update the shared transcript/gpt fields
+// until user calls /stop_recording
 /////////////////////////////////////////////////////////////
 #[post("/start_recording")]
 async fn start_recording(app_data: web::Data<AppState>) -> impl Responder {
@@ -103,14 +115,15 @@ async fn start_recording(app_data: web::Data<AppState>) -> impl Responder {
         }
     });
 
-    HttpResponse::Ok().body("Recording started in memory for 5s...")
+    HttpResponse::Ok().body("Recording started in memory for 5s blocks...")
 }
 
 /////////////////////////////////////////////////////////////
 // POST /stop_recording
 //
-// Sets is_recording = false. We do NOT forcibly kill the 
-// mic process if it's still running (the -d 5 auto-stops).
+// Sets is_recording = false. We do NOT forcibly kill the
+// mic process if it's mid-block (the chunk will wrap up
+// once the 5s finishes).
 /////////////////////////////////////////////////////////////
 #[post("/stop_recording")]
 async fn stop_recording(app_data: web::Data<AppState>) -> impl Responder {
@@ -161,52 +174,74 @@ async fn main() -> std::io::Result<()> {
 /////////////////////////////////////////////////////////////
 // record_and_process_audio
 //
-// 1) record_audio_in_memory(5) => in-memory WAV data
-// 2) transcribe_audio_with_whisper => get transcript
-// 3) summarize_with_gpt => short summary
-// 4) store results in app_data
+// ADDED: Now runs in a loop, capturing 5s chunks while 
+// is_recording = true. For each chunk, we do:
+// 1) record_audio_in_memory(5)
+// 2) transcribe with Whisper
+// 3) summarize with GPT
+// 4) append both to a JSON file with timestamps
+// 5) update shared state
 /////////////////////////////////////////////////////////////
 async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
-    println!("   >>> Starting 5s in-memory recording...");
+    // We loop until is_recording = false
+    loop {
+        // Check the is_recording flag at the start of each iteration
+        {
+            let flag = app_data.is_recording.lock().await;
+            if !*flag {
+                println!("   >>> Recording loop ended (user clicked Stop).");
+                break;
+            }
+        }
 
-    // 1) Record audio
-    let audio_data = record_audio_in_memory(5).await?;
-    println!("   >>> Recording complete, {} bytes captured.", audio_data.len());
+        println!("   >>> Starting 5s in-memory recording chunk...");
+        let audio_data = record_audio_in_memory(5).await?;
+        println!("   >>> Chunk captured, {} bytes.", audio_data.len());
 
-    // 2) Whisper
-    println!("   >>> Transcribing with Whisper...");
-    let transcript = transcribe_audio_with_whisper(&audio_data).await?;
-    println!("   >>> Transcript from Whisper: {}", transcript);
+        // Transcribe
+        println!("   >>> Sending chunk to Whisper...");
+        let transcript = transcribe_audio_with_whisper(&audio_data).await?;
+        println!("   >>> Transcript: {}", transcript);
 
-    // 3) GPT Summarize
-    println!("   >>> Summarizing with GPT...");
-    let gpt_response = summarize_with_gpt(&transcript).await?;
-    println!("   >>> GPT response: {}", gpt_response);
+        // Summarize with GPT
+        println!("   >>> Summarizing chunk with GPT...");
+        let gpt_response = summarize_with_gpt(&transcript).await?;
+        println!("   >>> GPT response: {}", gpt_response);
 
-    // 4) Update Shared State
-    {
-        let mut t = app_data.last_transcript.lock().await;
-        *t = transcript;
+        // ADDED: Append both to a local JSON file with timestamps
+        append_to_json_log("Microphone", &transcript)?;
+        append_to_json_log("OPENAI RESPONSE", &gpt_response)?;
+
+        // Update shared state so /transcript endpoint shows the latest
+        {
+            let mut t = app_data.last_transcript.lock().await;
+            *t = transcript;
+        }
+        {
+            let mut g = app_data.last_gpt_response.lock().await;
+            *g = gpt_response;
+        }
+
+        // Check if still recording after the chunk
+        {
+            let flag = app_data.is_recording.lock().await;
+            if !*flag {
+                println!("   >>> Recording loop ended after chunk.");
+                break;
+            }
+        }
     }
-    {
-        let mut g = app_data.last_gpt_response.lock().await;
-        *g = gpt_response;
-    }
-    {
-        let mut r = app_data.is_recording.lock().await;
-        *r = false;
-    }
-    println!("   >>> Done. is_recording = false.");
 
+    println!("   >>> Done with continuous chunk loop. is_recording = false.");
     Ok(())
 }
 
 /////////////////////////////////////////////////////////////
 // record_audio_in_memory
 //
-// Switches between "arecord" (Linux) and "rec" (SoX on mac) 
-// based on MIC_BACKEND env var. Captures the WAV data to a 
-// Vec<u8> in memory.
+// Switches between "arecord" (Linux) and "rec" (SoX on mac)
+// based on MIC_BACKEND env var. Captures the WAV data to a
+// Vec<u8> in memory. (No changes here.)
 /////////////////////////////////////////////////////////////
 async fn record_audio_in_memory(duration_sec: u32) -> Result<Vec<u8>> {
     let mic_cmd = get_mic_command(duration_sec)?;
@@ -242,22 +277,12 @@ async fn record_audio_in_memory(duration_sec: u32) -> Result<Vec<u8>> {
 /////////////////////////////////////////////////////////////
 // get_mic_command
 //
-// Returns the appropriate mic command + args for either 
+// Returns the appropriate mic command + args for either
 // "mac" (SoX) or "linux" (arecord), based on `MIC_BACKEND`.
 /////////////////////////////////////////////////////////////
 fn get_mic_command(duration_sec: u32) -> Result<Vec<String>> {
     let backend = env::var("MIC_BACKEND").unwrap_or_else(|_| "linux".to_string());
 
-    // For a simpler SoX usage on mac: rec -q -c 1 -r 16000 -b 16 -e signed-integer -t wav - trim 0 5
-    //   Explanation:
-    //   -q = quiet
-    //   -c 1 = 1 channel
-    //   -r 16000 = sample rate 16k
-    //   -b 16 = 16 bits
-    //   -e signed-integer = typical WAV encoding
-    //   -t wav - = write to stdout
-    //   trim 0 5 = record 5s
-    // This is just an example. Adjust as needed.
     if backend == "mac" {
         let mut cmd = vec![
             "rec".to_string(),
@@ -267,7 +292,7 @@ fn get_mic_command(duration_sec: u32) -> Result<Vec<String>> {
             "-b".to_string(), "16".to_string(),
             "-e".to_string(), "signed-integer".to_string(),
             "-t".to_string(), "wav".to_string(),
-            "-".to_string(),  // output to stdout
+            "-".to_string(),
             "trim".to_string(), "0".to_string(), duration_sec.to_string(),
         ];
         Ok(cmd)
@@ -373,4 +398,41 @@ async fn summarize_with_gpt(transcript: &str) -> Result<String> {
         .to_string();
 
     Ok(content)
+}
+
+/////////////////////////////////////////////////////////////
+// ADDED:
+// append_to_json_log(source, text)
+//
+// Appends a JSON record to "conversation_log.json" with:
+// {
+//   "timestamp": "...",
+//   "source": "<source>",
+//   "text": "<text>"
+// }
+/////////////////////////////////////////////////////////////
+fn append_to_json_log(source: &str, text: &str) -> Result<()> {
+    let timestamp = Utc::now().to_rfc3339();
+    let record = serde_json::json!({
+        "timestamp": timestamp,
+        "source": source,
+        "text": text
+    });
+
+    let record_string = serde_json::to_string(&record)
+        .context("Failed to serialize JSON record")?;
+
+    // Append each JSON entry on its own line for simplicity
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("conversation_log.json")
+        .context("Failed to open or create conversation_log.json")?;
+
+    use std::io::Write;
+    writeln!(file, "{}", record_string)
+        .context("Failed to write JSON record")?;
+
+    println!("   [DEBUG] Appended record to conversation_log.json: {}", record_string);
+    Ok(())
 }
