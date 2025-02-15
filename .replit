@@ -12,3 +12,7 @@ requiredFiles = [".replit"]
 [deployment]
 deploymentTarget = "cloudrun"
 run = ["sh", "-c", "cargo run --release"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
