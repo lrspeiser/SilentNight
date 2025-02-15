@@ -8,3 +8,6 @@ channel = "stable-24_05"
 
 [gitHubImport]
 requiredFiles = [".replit"]
+
+[deployment]
+deploymentTarget = "cloudrun"

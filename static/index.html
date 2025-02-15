@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant</title>
+    <style>
+        body { text-align: center; font-family: Arial, sans-serif; font-size: 24px; }
+        button { padding: 15px; font-size: 20px; margin: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🔊 AI Assistant</h1>
+    <p id="status">Press Start to record...</p>
+    <button onclick="startRecording()">🎤 Start Recording</button>
+    <button onclick="stopRecording()">🛑 Stop Recording</button>
+
+    <script>
+        async function startRecording() {
+            document.getElementById("status").innerText = "Recording...";
+            await fetch('/start_recording', { method: 'POST' });
+        }
+
+        async function stopRecording() {
+            document.getElementById("status").innerText = "Processing...";
+            await fetch('/stop_recording', { method: 'POST' });
+        }
+    </script>
+</body>
+</html>
