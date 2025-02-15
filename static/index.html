@@ -1,30 +1,32 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Assistant</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>AI Assistant Demo</title>
     <style>
-        body { text-align: center; font-family: Arial, sans-serif; font-size: 24px; }
-        button { padding: 15px; font-size: 20px; margin: 20px; }
+      body { text-align: center; font-family: Arial, sans-serif; font-size: 22px; }
+      button { padding: 10px 20px; font-size: 18px; margin: 10px; }
+      #status { margin-top: 30px; font-style: italic; }
     </style>
 </head>
 <body>
-    <h1>🔊 AI Assistant</h1>
+    <h1>Replit Deploy Demo</h1>
     <p id="status">Press Start to record...</p>
     <button onclick="startRecording()">🎤 Start Recording</button>
     <button onclick="stopRecording()">🛑 Stop Recording</button>
 
     <script>
-        async function startRecording() {
-            document.getElementById("status").innerText = "Recording...";
-            await fetch('/start_recording', { method: 'POST' });
-        }
+    async function startRecording() {
+        document.getElementById("status").innerText = "Recording...";
+        await fetch('/start_recording', { method: 'POST' });
+    }
 
-        async function stopRecording() {
-            document.getElementById("status").innerText = "Processing...";
-            await fetch('/stop_recording', { method: 'POST' });
-        }
+    async function stopRecording() {
+        document.getElementById("status").innerText = "Processing...";
+        await fetch('/stop_recording', { method: 'POST' });
+        document.getElementById("status").innerText = "Stopped.";
+    }
     </script>
 </body>
 </html>
