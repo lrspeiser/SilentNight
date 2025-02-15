@@ -268,7 +268,7 @@ fn get_mic_command(duration_sec: u32) -> Result<Vec<String>> {
             "-e".to_string(), "signed-integer".to_string(),
             "-t".to_string(), "wav".to_string(),
             "-".to_string(),  // output to stdout
-            "trim".to_string(), "0".to_string(), &duration_sec.to_string(),
+            "trim".to_string(), "0".to_string(), duration_sec.to_string(),
         ];
         Ok(cmd)
     } else {
