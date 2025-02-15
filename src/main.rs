@@ -165,6 +165,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_transcript)
             .service(start_recording)
             .service(stop_recording)
+            .service(conversation_log) // ADDED
     })
     .bind(("0.0.0.0", port))?
     .run()
