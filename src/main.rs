@@ -239,10 +239,11 @@ async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
         {
             let mut hist = app_data.conversation_history.lock().await;
             hist.push(("user".to_string(), transcript.clone()));
-            // Keep only last 20 messages
-            if hist.len() > 40 {
-                // each user+assistant = 2 messages, so 40 entries ~ 20 pairs
-                hist.drain(0..(hist.len() - 40));
+
+            // Keep only last 20 messages (40 entries, since each user+assistant is 2)
+            let length = hist.len();
+            if length > 40 {
+                hist.drain(0..(length - 40));
             }
         }
 
@@ -255,8 +256,10 @@ async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
         {
             let mut hist = app_data.conversation_history.lock().await;
             hist.push(("assistant".to_string(), gpt_response.clone()));
-            if hist.len() > 40 {
-                hist.drain(0..(hist.len() - 40));
+
+            let length = hist.len();
+            if length > 40 {
+                hist.drain(0..(length - 40));
             }
         }
 
