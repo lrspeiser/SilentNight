@@ -11,3 +11,4 @@ requiredFiles = [".replit"]
 
 [deployment]
 deploymentTarget = "cloudrun"
+run = ["sh", "-c", "cargo run --release"]
