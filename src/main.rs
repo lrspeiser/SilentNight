@@ -42,8 +42,7 @@ async fn main() {
 
 #[get("/")]
 async fn index() -> impl Responder {
-    let html = fs::read_to_string("static/index.html").unwrap();
-    HttpResponse::Ok().content_type("text/html").body(html)
+    HttpResponse::Ok().body("Service is running")
 }
 
 #[post("/start_recording")]
