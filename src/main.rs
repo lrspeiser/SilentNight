@@ -34,7 +34,7 @@ async fn main() {
             .service(start_recording)
             .service(stop_recording)
     })
-    .bind("0.0.0.0:8080")?
+    .bind(("0.0.0.0", 8080))?
     .run()
     .await
     .expect("Server failed to start");
