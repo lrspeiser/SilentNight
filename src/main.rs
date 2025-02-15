@@ -40,7 +40,7 @@ use chrono::Utc;
 // For streaming lines as SSE
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
-use actix_web::web::Data;
+use actix_web::web::{Data, Bytes}; // ADDED Bytes import
 
 /////////////////////////////////////////////////////////////
 // For HTTP calls to OpenAI
@@ -499,12 +499,13 @@ async fn live_log_sse(app_data: web::Data<AppState>) -> HttpResponse {
     let sse_stream = BroadcastStream::new(rx).map(|res| {
         match res {
             Ok(line) => {
-                // Format as SSE message
-                Ok::<_, std::io::Error>(format!("data: {}\n\n", line))
+                // Convert line => SSE data => Bytes
+                let msg = format!("data: {}\n\n", line);
+                Ok::<Bytes, std::io::Error>(Bytes::from(msg))
             }
             Err(_) => {
-                // if channel lagged or closed
-                Ok::<_, std::io::Error>("data:\n\n".to_string())
+                // If channel lagged or closed
+                Ok::<Bytes, std::io::Error>(Bytes::from("data:\n\n"))
             }
         }
     });
