@@ -1,17 +1,8 @@
-use reqwest::Client;
-use tokio_stream::StreamExt;
-use serde_json::Value;
-use std::io::{self, Write};
-use crossterm::{
-    execute,
-    terminal::{Clear, ClearType},
-};
-use std::fs;
-use std::io::stdout;
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 use std::process::Command;
+use std::fs;
 
 const WAV_FILENAME: &str = "output.wav";
 
@@ -20,7 +11,7 @@ struct AppState {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() {
+async fn main() -> std::io::Result<()> {
     println!("🚀 Starting the 'Conversation Listener' demo...");
 
     let app_state = web::Data::new(AppState {
@@ -37,7 +28,6 @@ async fn main() {
     .bind(("0.0.0.0", 8080))?
     .run()
     .await
-    .expect("Server failed to start");
 }
 
 #[get("/")]
@@ -68,4 +58,3 @@ async fn stop_recording(data: web::Data<AppState>) -> impl Responder {
     *recording = false;
     HttpResponse::Ok().body("Recording stopped")
 }
-
