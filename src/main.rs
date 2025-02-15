@@ -442,7 +442,6 @@ fn append_to_json_log(source: &str, text: &str) -> Result<()> {
 // ENABLE SCREEN TO SHOW OUTPUTS
 /////////////////////////////////////////////////////////////
 
-use actix_files::NamedFile; // optional approach or read file manually
 
 #[get("/conversation_log")]
 async fn conversation_log() -> impl Responder {
