@@ -284,7 +284,7 @@ fn get_mic_command(duration_sec: u32) -> Result<Vec<String>> {
     let backend = env::var("MIC_BACKEND").unwrap_or_else(|_| "linux".to_string());
 
     if backend == "mac" {
-        let mut cmd = vec![
+        let cmd = vec![
             "rec".to_string(),
             "-q".to_string(),
             "-c".to_string(), "1".to_string(),
