@@ -14,6 +14,12 @@
 // - Appending transcripts and GPT responses as JSON to a file,
 //   with "source": "Microphone" or "OPENAI RESPONSE" plus 
 //   timestamps.
+//
+// NEW SSE CHANGES:
+// - A broadcast channel in AppState (log_sender) for streaming 
+//   appended lines in real time.
+// - A new /live_log SSE endpoint that sends each appended JSON line
+//   to the browser without requiring refresh.
 /////////////////////////////////////////////////////////////
 
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
@@ -21,7 +27,7 @@ use std::env;
 use std::sync::Arc;
 use std::fs;
 
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use anyhow::{Context, Result};
@@ -30,6 +36,11 @@ use std::process::Stdio;
 
 // ADDED: for timestamps
 use chrono::Utc;
+
+// For streaming lines as SSE
+use futures_util::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
+use actix_web::web::Data;
 
 /////////////////////////////////////////////////////////////
 // For HTTP calls to OpenAI
@@ -46,6 +57,9 @@ struct AppState {
     last_transcript: Arc<AsyncMutex<String>>,
     // Last GPT response to that transcription
     last_gpt_response: Arc<AsyncMutex<String>>,
+
+    // ADDED: Broadcast channel to push new log lines in real-time
+    log_sender: broadcast::Sender<String>,
 }
 
 /////////////////////////////////////////////////////////////
@@ -150,11 +164,15 @@ async fn main() -> std::io::Result<()> {
     println!("   Listening on port {}", port);
     println!("===============================================");
 
+    // ADDED: Create a broadcast channel for real-time SSE lines
+    let (log_sender, _rx) = broadcast::channel(100);
+
     // Initialize shared state
     let app_state = web::Data::new(AppState {
         is_recording: Arc::new(AsyncMutex::new(false)),
         last_transcript: Arc::new(AsyncMutex::new(String::new())),
         last_gpt_response: Arc::new(AsyncMutex::new(String::new())),
+        log_sender, // store the sender
     });
 
     // Launch Actix Web
@@ -166,6 +184,7 @@ async fn main() -> std::io::Result<()> {
             .service(start_recording)
             .service(stop_recording)
             .service(conversation_log) // ADDED
+            .service(live_log_sse)     // ADDED SSE route
     })
     .bind(("0.0.0.0", port))?
     .run()
@@ -210,8 +229,8 @@ async fn record_and_process_audio(app_data: web::Data<AppState>) -> Result<()> {
         println!("   >>> GPT response: {}", gpt_response);
 
         // ADDED: Append both to a local JSON file with timestamps
-        append_to_json_log("Microphone", &transcript)?;
-        append_to_json_log("OPENAI RESPONSE", &gpt_response)?;
+        append_to_json_log("Microphone", &transcript, &app_data)?;
+        append_to_json_log("OPENAI RESPONSE", &gpt_response, &app_data)?;
 
         // Update shared state so /transcript endpoint shows the latest
         {
@@ -404,16 +423,16 @@ async fn summarize_with_gpt(transcript: &str) -> Result<String> {
 
 /////////////////////////////////////////////////////////////
 // ADDED:
-// append_to_json_log(source, text)
+// append_to_json_log(source, text, app_data)
 //
-// Appends a JSON record to "conversation_log.json" with:
-// {
-//   "timestamp": "...",
-//   "source": "<source>",
-//   "text": "<text>"
-// }
+// Now requires app_data so we can broadcast new lines over SSE.
+// The original function name remains, but we add an extra param.
 /////////////////////////////////////////////////////////////
-fn append_to_json_log(source: &str, text: &str) -> Result<()> {
+fn append_to_json_log(
+    source: &str,
+    text: &str,
+    app_data: &web::Data<AppState>,
+) -> Result<()> {
     let timestamp = Utc::now().to_rfc3339();
     let record = serde_json::json!({
         "timestamp": timestamp,
@@ -436,13 +455,16 @@ fn append_to_json_log(source: &str, text: &str) -> Result<()> {
         .context("Failed to write JSON record")?;
 
     println!("   [DEBUG] Appended record to conversation_log.json: {}", record_string);
+
+    // ADDED: Also broadcast over SSE for real-time display
+    let _ = app_data.log_sender.send(record_string.clone());
+
     Ok(())
 }
 
 /////////////////////////////////////////////////////////////
 // ENABLE SCREEN TO SHOW OUTPUTS
 /////////////////////////////////////////////////////////////
-
 
 #[get("/conversation_log")]
 async fn conversation_log() -> impl Responder {
@@ -460,4 +482,34 @@ async fn conversation_log() -> impl Responder {
                 .body(format!("Failed to read {path}: {e}"))
         }
     }
+}
+
+/////////////////////////////////////////////////////////////
+// ADDED: SSE ENDPOINT /live_log
+//
+// Streams new lines from conversation_log.json in real-time
+// using the broadcast channel in AppState.
+/////////////////////////////////////////////////////////////
+#[get("/live_log")]
+async fn live_log_sse(app_data: web::Data<AppState>) -> HttpResponse {
+    // Subscribe to the broadcast channel
+    let rx = app_data.log_sender.subscribe();
+
+    // Convert the broadcast receiver into a stream of SSE events
+    let sse_stream = BroadcastStream::new(rx).map(|res| {
+        match res {
+            Ok(line) => {
+                // Format as SSE message
+                Ok::<_, std::io::Error>(format!("data: {}\n\n", line))
+            }
+            Err(_) => {
+                // if channel lagged or closed
+                Ok::<_, std::io::Error>("data:\n\n".to_string())
+            }
+        }
+    });
+
+    HttpResponse::Ok()
+        .content_type("text/event-stream")
+        .streaming(sse_stream)
 }

@@ -23,16 +23,39 @@
   <pre id="conversationLog"></pre>
 
   <script>
+    // ADDED: We'll keep a reference to the EventSource so we don't reconnect repeatedly
+    let es = null;
+
     async function startRecording() {
       document.getElementById('status').innerText = "Recording started...";
       // POST /start_recording
       await fetch('/start_recording', { method: 'POST' });
+
+      // ADDED: If SSE not already started, connect now.
+      if (!es) {
+        es = new EventSource('/live_log');
+        es.onmessage = (event) => {
+          // Each new JSON line appended by the server arrives here
+          // Append it to the conversationLog <pre> in real time
+          document.getElementById('conversationLog').textContent += event.data;
+        };
+        es.onerror = (err) => {
+          console.log("SSE error", err);
+        };
+      }
     }
 
     async function stopRecording() {
       document.getElementById('status').innerText = "Stopped recording.";
       // POST /stop_recording
       await fetch('/stop_recording', { method: 'POST' });
+
+      // ADDED: optionally close the SSE connection if we don't want more lines
+      // But if you want to keep seeing lines, you can omit this
+      if (es) {
+        es.close();
+        es = null;
+      }
     }
 
     async function fetchTranscript() {
