@@ -21,15 +21,18 @@
   <script>
     async function startRecording() {
       document.getElementById('status').innerText = "Recording started...";
+      // POST /start_recording
       await fetch('/start_recording', { method: 'POST' });
     }
 
     async function stopRecording() {
       document.getElementById('status').innerText = "Stopped recording.";
+      // POST /stop_recording
       await fetch('/stop_recording', { method: 'POST' });
     }
 
     async function fetchTranscript() {
+      // GET /transcript
       const resp = await fetch('/transcript');
       const data = await resp.json();
       document.getElementById('transcriptArea').textContent = 
