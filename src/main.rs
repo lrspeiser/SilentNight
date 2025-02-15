@@ -355,16 +355,17 @@ async fn transcribe_audio_with_whisper(audio_data: &[u8]) -> Result<String> {
 /////////////////////////////////////////////////////////////
 // summarize_with_gpt
 //
-// Sends the transcription to GPT-3.5 or GPT-4 for summarizing
+// Sends the transcription to GPT-4o for summarizing
+// DO NOT CHANGE THE system_prompt text
 /////////////////////////////////////////////////////////////
 async fn summarize_with_gpt(transcript: &str) -> Result<String> {
     let api_key = env::var("OPENAI_API_KEY")
         .context("Must set OPENAI_API_KEY")?;
     println!("   [DEBUG] Sending transcript to GPT: {}", transcript);
 
-    let system_prompt = "You are a helpful AI. Summarize the user's speech briefly.";
+    let system_prompt = "You are listening in on a conversation. You will display your response on a monitor mounted on the wall, so the goal should be 50 words or less so they are not too small. If there is something said that you could provide some interesting information about, return a response. If there is nothing interesting to share, just return Listening...";
     let req_body = serde_json::json!({
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4o",
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user",   "content": transcript }
